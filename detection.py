@@ -1,6 +1,6 @@
 """
 Requirements:
-pip install opencv-python mediapipe numpy
+pip install opencv-python mediapipe numpy requests
 """
 
 import argparse
@@ -12,6 +12,7 @@ import sys
 import cv2
 import mediapipe as mp
 import numpy as np
+import requests
 
 
 class Config:
@@ -32,6 +33,9 @@ class Config:
     ALERT_COOLDOWN_SECONDS = 5
 
     ALERT_DISPLAY_SECONDS = 3
+
+    # Server configuration
+    SERVER_URL = "http://localhost:8080"
 
 
 class LM:
@@ -76,6 +80,27 @@ class FallDetector:
         self.fall_active             = False      
         self.last_alert_time         = 0.0
         self.alert_until             = 0.0    
+
+    def send_alert(self, frame):
+        """Send alert to server with current frame as image."""
+        try:
+            # Encode frame as JPEG
+            _, img_encoded = cv2.imencode('.jpg', frame)
+            img_bytes = img_encoded.tobytes()
+            
+            # Prepare multipart data
+            files = {'file': ('fall_detection.jpg', img_bytes, 'image/jpeg')}
+            headers = {'Authorization': f'Bearer {self.cfg}'}
+            
+            url = f"{self.cfg.SERVER_URL}/api/alert/"
+            response = requests.post(url, files=files, headers=headers)
+            
+            if response.status_code == 201:
+                print("[INFO] Alert sent successfully.")
+            else:
+                print(f"[ERROR] Failed to send alert: {response.status_code} - {response.text}")
+        except Exception as e:
+            print(f"[ERROR] Exception sending alert: {e}")
 
 
     def _analyse(self, landmarks, frame_w, frame_h):
@@ -239,7 +264,7 @@ def run(source):
     except (ValueError, TypeError):
         pass
 
-    cap = cv2.VideoCapture(1)
+    cap = cv2.VideoCapture(source)
     if not cap.isOpened():
         print(f"[ERROR] Cannot open source: {source}")
         sys.exit(1)
@@ -274,7 +299,10 @@ def run(source):
             if result.pose_landmarks:
                 landmarks = result.pose_landmarks.landmark
 
-                _, metrics, signals = detector.update(landmarks, frame_w, frame_h)
+                newly_detected, metrics, signals = detector.update(landmarks, frame_w, frame_h)
+
+                if newly_detected:
+                    detector.send_alert(frame)
 
                 if show_skeleton:
                     mp_draw.draw_landmarks(
